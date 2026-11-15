@@ -1,22 +1,21 @@
 import psycopg2
+import psycopg2.extras
 import pandas as pd
 import streamlit as st
 
 def get_connection():
-    # Pega a URL do secrets. Substituímos o [ e ] caso o usuário tenha digitado sem querer
-    url = st.secrets["DB_URL"].replace("[", "").replace("]", "")
-    # Se a senha tem @, precisaria de URL encoding, mas o psycopg2 costuma aceitar bem no formato DSN ou URI.
-    # Porém, se der erro de parsing, passamos a string diretamente.
+    url = st.secrets["DB_URL"]
     return psycopg2.connect(url)
 
 def init_db():
     conn = get_connection()
     c = conn.cursor()
-    # Tabela Coletas (PostgreSQL usa SERIAL para autoincrement)
+
+    # Tabela Coletas
     c.execute('''
         CREATE TABLE IF NOT EXISTS coletas (
             id SERIAL PRIMARY KEY,
-            data_coleta DATE,
+            data_coleta TEXT,
             nome_medicamento TEXT,
             forma_farmaceutica TEXT,
             validade TEXT,
@@ -48,7 +47,7 @@ def init_db():
             peso_solidos REAL
         )
     ''')
-    
+
     # Inserir formas iniciais se vazio
     c.execute("SELECT COUNT(*) FROM formas")
     if c.fetchone()[0] == 0:
@@ -60,7 +59,6 @@ def init_db():
             ("Pomada", "Semissólido"),
             ("Pó para suspensão", "Sólido")
         ]
-        # psycopg2 usa %s em vez de ?
         c.executemany("INSERT INTO formas (nome_forma, estado_fisico) VALUES (%s, %s)", formas_iniciais)
 
     conn.commit()
@@ -85,7 +83,7 @@ def get_all_formas():
 def add_forma(nome, estado):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("INSERT INTO formas (nome_forma, estado_fisico) VALUES (%s, %s) ON CONFLICT (nome_forma) DO NOTHING", (nome, estado))
+    c.execute("INSERT INTO formas (nome_forma, estado_fisico) VALUES (%s, %s) ON CONFLICT DO NOTHING", (nome, estado))
     conn.commit()
     conn.close()
 
@@ -113,11 +111,11 @@ def upsert_classificacao(nome, atc, mec_acao, classe_est, mec_antires):
     c.execute('''
         INSERT INTO classificacoes (nome_medicamento, classe_atc, mecanismo_acao, classe_estrutural, mecanismo_antiresistencia)
         VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT(nome_medicamento) DO UPDATE SET
-            classe_atc=excluded.classe_atc,
-            mecanismo_acao=excluded.mecanismo_acao,
-            classe_estrutural=excluded.classe_estrutural,
-            mecanismo_antiresistencia=excluded.mecanismo_antiresistencia
+        ON CONFLICT (nome_medicamento) DO UPDATE SET
+            classe_atc=EXCLUDED.classe_atc,
+            mecanismo_acao=EXCLUDED.mecanismo_acao,
+            classe_estrutural=EXCLUDED.classe_estrutural,
+            mecanismo_antiresistencia=EXCLUDED.mecanismo_antiresistencia
     ''', (nome, atc, mec_acao, classe_est, mec_antires))
     conn.commit()
     conn.close()
@@ -136,9 +134,9 @@ def upsert_pesagem(mes_ano, liquidos, solidos):
     c.execute('''
         INSERT INTO pesagens (mes_ano, peso_liquidos, peso_solidos)
         VALUES (%s, %s, %s)
-        ON CONFLICT(mes_ano) DO UPDATE SET
-            peso_liquidos=excluded.peso_liquidos,
-            peso_solidos=excluded.peso_solidos
+        ON CONFLICT (mes_ano) DO UPDATE SET
+            peso_liquidos=EXCLUDED.peso_liquidos,
+            peso_solidos=EXCLUDED.peso_solidos
     ''', (mes_ano, liquidos, solidos))
     conn.commit()
     conn.close()
@@ -146,7 +144,7 @@ def upsert_pesagem(mes_ano, liquidos, solidos):
 def get_df_exportacao():
     conn = get_connection()
     query = '''
-        SELECT 
+        SELECT
             c.id as "ID",
             COALESCE(cl.classe_atc, '') as "Classe ATC",
             c.data_coleta as "Data da Coleta",
@@ -168,7 +166,7 @@ def get_df_exportacao():
 def get_df_completo():
     conn = get_connection()
     query = '''
-        SELECT 
+        SELECT
             c.*,
             COALESCE(cl.classe_atc, '') as classe_atc,
             COALESCE(cl.mecanismo_acao, '') as mecanismo_acao,
@@ -181,3 +179,10 @@ def get_df_completo():
     df = pd.read_sql_query(query, conn)
     conn.close()
     return df
+
+def clear_all_coletas():
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM coletas")
+    conn.commit()
+    conn.close()
